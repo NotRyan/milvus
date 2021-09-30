@@ -430,16 +430,16 @@ func (scheduler *TaskScheduler) Enqueue(tasks []task) {
 		taskKey := fmt.Sprintf("%s/%d", triggerTaskPrefix, t.ID())
 		blobs, err := t.Marshal()
 		if err != nil {
-			log.Error("error when save marshal task", zap.Int64("taskID", t.ID()), zap.String("error", err.Error()))
+			log.Error("error when marshalling task", zap.Int64("taskID", t.ID()), zap.String("error", err.Error()))
 		}
 		kvs[taskKey] = string(blobs)
 		stateKey := fmt.Sprintf("%s/%d", taskInfoPrefix, t.ID())
 		kvs[stateKey] = strconv.Itoa(int(taskUndo))
 		err = scheduler.client.MultiSave(kvs)
 		if err != nil {
-			log.Error("error when save trigger task to etcd", zap.Int64("taskID", t.ID()), zap.String("error", err.Error()))
+			log.Error("error when saving trigger task to etcd", zap.Int64("taskID", t.ID()), zap.String("error", err.Error()))
 		}
-		log.Debug("EnQueue a triggerTask and save to etcd", zap.Int64("taskID", t.ID()))
+		log.Debug("EnQueued a triggerTask and saved to etcd", zap.Int64("taskID", t.ID()))
 		t.SetState(taskUndo)
 	}
 
@@ -453,7 +453,7 @@ func (scheduler *TaskScheduler) processTask(t task) error {
 			"ID":   t.ID(),
 		})
 	defer span.Finish()
-	span.LogFields(oplog.Int64("processTask: scheduler process PreExecute", t.ID()))
+	span.LogFields(oplog.Int64("processTask: scheduler processing PreExecute", t.ID()))
 	t.PreExecute(ctx)
 
 	key := fmt.Sprintf("%s/%d", taskInfoPrefix, t.ID())
@@ -465,7 +465,7 @@ func (scheduler *TaskScheduler) processTask(t task) error {
 	}
 	t.SetState(taskDoing)
 
-	span.LogFields(oplog.Int64("processTask: scheduler process Execute", t.ID()))
+	span.LogFields(oplog.Int64("processTask: scheduler processing Execute", t.ID()))
 	err = t.Execute(ctx)
 	if err != nil {
 		log.Debug("processTask: execute err", zap.String("reason", err.Error()), zap.Int64("taskID", t.ID()))
@@ -501,7 +501,7 @@ func (scheduler *TaskScheduler) processTask(t task) error {
 			trace.LogError(span, err)
 			return err
 		}
-		log.Debug("processTask: save active task to etcd", zap.Int64("parent taskID", t.ID()), zap.Int64("child taskID", childTask.ID()))
+		log.Debug("processTask: saved active task to etcd", zap.Int64("parent taskID", t.ID()), zap.Int64("child taskID", childTask.ID()))
 	}
 
 	err = scheduler.client.Save(key, strconv.Itoa(int(taskDone)))
@@ -511,7 +511,7 @@ func (scheduler *TaskScheduler) processTask(t task) error {
 		return err
 	}
 
-	span.LogFields(oplog.Int64("processTask: scheduler process PostExecute", t.ID()))
+	span.LogFields(oplog.Int64("processTask: scheduler processing PostExecute", t.ID()))
 	t.PostExecute(ctx)
 	t.SetState(taskDone)
 
@@ -529,7 +529,7 @@ func (scheduler *TaskScheduler) scheduleLoop() {
 			return
 		case <-scheduler.triggerTaskQueue.Chan():
 			t := scheduler.triggerTaskQueue.PopTask()
-			log.Debug("scheduleLoop: pop a triggerTask from triggerTaskQueue", zap.Int64("taskID", t.ID()))
+			log.Debug("scheduleLoop: popped a triggerTask from triggerTaskQueue", zap.Int64("taskID", t.ID()))
 			if t.State() < taskDone {
 				err = scheduler.processTask(t)
 				if err != nil {
@@ -544,7 +544,7 @@ func (scheduler *TaskScheduler) scheduleLoop() {
 			log.Debug("scheduleLoop: num of child task", zap.Int("num child task", len(t.GetChildTask())))
 			for _, childTask := range t.GetChildTask() {
 				if childTask != nil {
-					log.Debug("scheduleLoop: add a activate task to activateChan", zap.Int64("taskID", childTask.ID()))
+					log.Debug("scheduleLoop: adding an activate task to activateChan", zap.Int64("taskID", childTask.ID()))
 					scheduler.activateTaskChan <- childTask
 					activeTaskWg.Add(1)
 					go scheduler.waitActivateTaskDone(activeTaskWg, childTask)
@@ -562,11 +562,11 @@ func (scheduler *TaskScheduler) scheduleLoop() {
 			keys = append(keys, stateKey)
 			err = scheduler.client.MultiRemove(keys)
 			if err != nil {
-				log.Error("scheduleLoop: error when remove trigger task to etcd", zap.Int64("taskID", t.ID()))
+				log.Error("scheduleLoop: error when removing trigger task from etcd", zap.Int64("taskID", t.ID()))
 				t.Notify(err)
 				continue
 			}
-			log.Debug("scheduleLoop: trigger task done and delete from etcd", zap.Int64("taskID", t.ID()))
+			log.Debug("scheduleLoop: trigger task done and deleted from etcd", zap.Int64("taskID", t.ID()))
 			t.Notify(err)
 		}
 	}
@@ -603,7 +603,7 @@ func (scheduler *TaskScheduler) waitActivateTaskDone(wg *sync.WaitGroup, t task)
 						taskKey := fmt.Sprintf("%s/%d", activeTaskPrefix, rt.ID())
 						blobs, err := rt.Marshal()
 						if err != nil {
-							log.Error("waitActivateTaskDone: error when marshal active task")
+							log.Error("waitActivateTaskDone: error when marshalling active task")
 							continue
 							//TODO::xige-16 deal error when marshal task failed
 						}
@@ -615,14 +615,14 @@ func (scheduler *TaskScheduler) waitActivateTaskDone(wg *sync.WaitGroup, t task)
 				}
 				err = scheduler.client.MultiSaveAndRemove(saves, removes)
 				if err != nil {
-					log.Error("waitActivateTaskDone: error when save and remove task from etcd")
+					log.Error("waitActivateTaskDone: error when saving and removing task from etcd")
 					//TODO::xige-16 deal error when save meta failed
 				}
-				log.Debug("waitActivateTaskDone: delete failed active task and save reScheduled task to etcd", zap.Int64("failed taskID", t.ID()), zap.Int64s("reScheduled taskIDs", reSchedID))
+				log.Debug("waitActivateTaskDone: deleted failed active task and saved reScheduled task to etcd", zap.Int64("failed taskID", t.ID()), zap.Int64s("reScheduled taskIDs", reSchedID))
 
 				for _, rt := range reScheduledTasks {
 					if rt != nil {
-						log.Debug("waitActivateTaskDone: add a reScheduled active task to activateChan", zap.Int64("taskID", rt.ID()))
+						log.Debug("waitActivateTaskDone: adding a reScheduled active task to activateChan", zap.Int64("taskID", rt.ID()))
 						scheduler.activateTaskChan <- rt
 						wg.Add(1)
 						go scheduler.waitActivateTaskDone(wg, rt)
@@ -630,7 +630,7 @@ func (scheduler *TaskScheduler) waitActivateTaskDone(wg *sync.WaitGroup, t task)
 				}
 				//delete task from etcd
 			} else {
-				log.Debug("waitActivateTaskDone: retry the active task", zap.Int64("taskID", t.ID()))
+				log.Debug("waitActivateTaskDone: retrying the active task", zap.Int64("taskID", t.ID()))
 				scheduler.activateTaskChan <- t
 				wg.Add(1)
 				go scheduler.waitActivateTaskDone(wg, t)
@@ -639,7 +639,7 @@ func (scheduler *TaskScheduler) waitActivateTaskDone(wg *sync.WaitGroup, t task)
 
 		redoFunc2 := func() {
 			if t.IsValid() {
-				log.Debug("waitActivateTaskDone: retry the active task", zap.Int64("taskID", t.ID()))
+				log.Debug("waitActivateTaskDone: retrying the active task", zap.Int64("taskID", t.ID()))
 				scheduler.activateTaskChan <- t
 				wg.Add(1)
 				go scheduler.waitActivateTaskDone(wg, t)
@@ -651,7 +651,7 @@ func (scheduler *TaskScheduler) waitActivateTaskDone(wg *sync.WaitGroup, t task)
 				removes = append(removes, stateKey)
 				err = scheduler.client.MultiRemove(removes)
 				if err != nil {
-					log.Error("waitActivateTaskDone: error when remove task from etcd", zap.Int64("taskID", t.ID()))
+					log.Error("waitActivateTaskDone: error when removing task from etcd", zap.Int64("taskID", t.ID()))
 				}
 			}
 		}
@@ -680,9 +680,9 @@ func (scheduler *TaskScheduler) waitActivateTaskDone(wg *sync.WaitGroup, t task)
 		keys = append(keys, stateKey)
 		err = scheduler.client.MultiRemove(keys)
 		if err != nil {
-			log.Error("waitActivateTaskDone: error when remove task from etcd", zap.Int64("taskID", t.ID()))
+			log.Error("waitActivateTaskDone: error when removing task from etcd", zap.Int64("taskID", t.ID()))
 		}
-		log.Debug("waitActivateTaskDone: delete activate task from etcd", zap.Int64("taskID", t.ID()))
+		log.Debug("waitActivateTaskDone: deleted activate task from etcd", zap.Int64("taskID", t.ID()))
 	}
 	log.Debug("waitActivateTaskDone: one activate task done", zap.Int64("taskID", t.ID()))
 }
@@ -704,7 +704,7 @@ func (scheduler *TaskScheduler) processActivateTaskLoop() {
 				t.Notify(err)
 				continue
 			}
-			log.Debug("processActivateTaskLoop: pop a active task from activateChan", zap.Int64("taskID", t.ID()))
+			log.Debug("processActivateTaskLoop: pop an active task from activateChan", zap.Int64("taskID", t.ID()))
 			go func() {
 				err := scheduler.processTask(t)
 				t.Notify(err)
